@@ -11,7 +11,24 @@ export function useIsMobile() {
       return
     }
 
+    // Check if matchMedia is available
+    if (typeof window.matchMedia !== 'function') {
+      return
+    }
+
     const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+    
+    // Check if mql has addEventListener method
+    if (typeof mql.addEventListener !== 'function') {
+      // Fallback: set initial value and check on resize
+      const checkMobile = () => {
+        setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+      }
+      checkMobile()
+      window.addEventListener('resize', checkMobile)
+      return () => window.removeEventListener('resize', checkMobile)
+    }
+
     const onChange = () => {
       setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
     }

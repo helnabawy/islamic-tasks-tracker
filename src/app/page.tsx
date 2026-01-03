@@ -3,9 +3,11 @@
 // Islamic Tracker - Multi-language (Arabic/English), RTL/LTR support, Light/Dark mode
 // Features: Task tracking, Quran reminders, Authentication, Guest mode
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { BookOpen, CheckCircle, Circle, Plus, Calendar, LogOut, User, Sparkles, Clock, Trash2 } from 'lucide-react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -15,9 +17,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
 import { toast } from '@/hooks/use-toast'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { LanguageSwitcher } from '@/components/language-switcher'
+import { taskSchema, quranReminderSchema, loginSchema, type TaskFormData, type QuranReminderFormData, type LoginFormData } from '@/lib/validations'
 
 interface Task {
   id: string
@@ -304,124 +308,349 @@ export default function Home() {
   }, [])
   
   const [isGuest, setIsGuest] = useState(true)
+  const [userId, setUserId] = useState<string>('guest')
   const [showLogin, setShowLogin] = useState(false)
   const [tasks, setTasks] = useState<Task[]>([])
   const [quranReminders, setQuranReminders] = useState<QuranReminder[]>([])
   const [activeTab, setActiveTab] = useState('tasks')
-
-  // Task form state
-  const [taskTitle, setTaskTitle] = useState('')
-  const [taskDescription, setTaskDescription] = useState('')
-  const [taskCategory, setTaskCategory] = useState('general')
-  const [taskPriority, setTaskPriority] = useState('medium')
-  const [taskDueDate, setTaskDueDate] = useState('')
   const [showTaskDialog, setShowTaskDialog] = useState(false)
-
-  // Quran reminder form state
-  const [surahNumber, setSurahNumber] = useState('')
-  const [startAyah, setStartAyah] = useState('')
-  const [endAyah, setEndAyah] = useState('')
-  const [quranNotes, setQuranNotes] = useState('')
-  const [reminderTime, setReminderTime] = useState('')
   const [showQuranDialog, setShowQuranDialog] = useState(false)
 
-  // Login form state
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  // Task form with validation
+  const taskForm = useForm<TaskFormData>({
+    resolver: zodResolver(taskSchema),
+    defaultValues: {
+      title: '',
+      description: '',
+      category: 'general',
+      priority: 'medium',
+      dueDate: '',
+    },
+  })
+
+  // Quran reminder form with validation
+  const quranForm = useForm<QuranReminderFormData>({
+    resolver: zodResolver(quranReminderSchema),
+    defaultValues: {
+      surahNumber: '',
+      startAyah: '',
+      endAyah: '',
+      notes: '',
+      reminderTime: '',
+    },
+  })
+
+  // Login form with validation
+  const loginForm = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      email: '',
+      password: '',
+    },
+  })
 
   const getSurahName = (number: number) => {
     return surahNames[number - 1] || `${t('quran.surah')} ${number}`
   }
 
-  const handleAddTask = () => {
-    if (!taskTitle.trim()) {
-      toast({ title: t('common.error'), description: t('tasks.taskTitleRequired'), variant: 'destructive' })
-      return
+  // Load data on mount and when userId changes
+  useEffect(() => {
+    loadData()
+  }, [userId])
+
+  const loadData = async () => {
+    try {
+      if (isGuest) {
+        // Load from localStorage for guest mode
+        const savedTasks = localStorage.getItem('islamic-tracker-tasks')
+        const savedReminders = localStorage.getItem('islamic-tracker-reminders')
+        
+        if (savedTasks) setTasks(JSON.parse(savedTasks))
+        if (savedReminders) setQuranReminders(JSON.parse(savedReminders))
+      } else {
+        // Load from database for authenticated users
+        const [tasksRes, remindersRes] = await Promise.all([
+          fetch(`/api/tasks?userId=${userId}`),
+          fetch(`/api/quran-reminders?userId=${userId}`)
+        ])
+        
+        if (tasksRes.ok) {
+          const tasksData = await tasksRes.json()
+          setTasks(tasksData)
+        }
+        
+        if (remindersRes.ok) {
+          const remindersData = await remindersRes.json()
+          setQuranReminders(remindersData)
+        }
+      }
+    } catch (error) {
+      console.error('Error loading data:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Failed to load data',
+        variant: 'destructive' 
+      })
     }
+  }
 
-    const newTask: Task = {
-      id: Date.now().toString(),
-      title: taskTitle,
-      description: taskDescription || null,
-      completed: false,
-      category: taskCategory,
-      priority: taskPriority,
-      dueDate: taskDueDate ? new Date(taskDueDate) : null
+  const saveToLocalStorage = (key: string, data: any) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(data))
+    } catch (error) {
+      console.error('Error saving to localStorage:', error)
     }
-
-    setTasks([newTask, ...tasks])
-    setTaskTitle('')
-    setTaskDescription('')
-    setTaskCategory('general')
-    setTaskPriority('medium')
-    setTaskDueDate('')
-    setShowTaskDialog(false)
-    toast({ title: t('tasks.taskCreated'), description: t('tasks.taskCreatedDesc') })
   }
 
-  const handleToggleTask = (id: string) => {
-    setTasks(tasks.map(task =>
-      task.id === id ? { ...task, completed: !task.completed } : task
-    ))
-  }
-
-  const handleDeleteTask = (id: string) => {
-    setTasks(tasks.filter(task => task.id !== id))
-    toast({ title: t('tasks.taskDeleted'), description: t('tasks.taskDeletedDesc') })
-  }
-
-  const handleAddQuranReminder = () => {
-    if (!surahNumber || !startAyah || !endAyah) {
-      toast({ title: t('common.error'), description: t('quran.fillRequiredFields'), variant: 'destructive' })
-      return
+  const handleAddTask = async (data: TaskFormData) => {
+    try {
+      if (isGuest) {
+        // Save to localStorage for guest mode
+        const newTask: Task = {
+          id: Date.now().toString(),
+          title: data.title,
+          description: data.description || null,
+          completed: false,
+          category: data.category,
+          priority: data.priority,
+          dueDate: data.dueDate ? new Date(data.dueDate) : null
+        }
+        
+        const updatedTasks = [newTask, ...tasks]
+        setTasks(updatedTasks)
+        saveToLocalStorage('islamic-tracker-tasks', updatedTasks)
+      } else {
+        // Save to database for authenticated users
+        const response = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...data, userId })
+        })
+        
+        if (!response.ok) throw new Error('Failed to create task')
+        
+        const newTask = await response.json()
+        setTasks([newTask, ...tasks])
+      }
+      
+      taskForm.reset()
+      setShowTaskDialog(false)
+      toast({ title: t('tasks.taskCreated'), description: t('tasks.taskCreatedDesc') })
+    } catch (error) {
+      console.error('Error creating task:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Failed to create task',
+        variant: 'destructive'
+      })
     }
+  }
 
-    const newReminder: QuranReminder = {
-      id: Date.now().toString(),
-      surahNumber: parseInt(surahNumber),
-      surahName: getSurahName(parseInt(surahNumber)),
-      startAyah: parseInt(startAyah),
-      endAyah: parseInt(endAyah),
-      notes: quranNotes || null,
-      completed: false,
-      reminderTime: reminderTime ? new Date(reminderTime) : null
+  const handleToggleTask = async (id: string) => {
+    try {
+      const task = tasks.find(t => t.id === id)
+      if (!task) return
+      
+      const updatedTask = { ...task, completed: !task.completed }
+      
+      if (isGuest) {
+        const updatedTasks = tasks.map(t => t.id === id ? updatedTask : t)
+        setTasks(updatedTasks)
+        saveToLocalStorage('islamic-tracker-tasks', updatedTasks)
+      } else {
+        const response = await fetch(`/api/tasks/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ completed: !task.completed })
+        })
+        
+        if (!response.ok) throw new Error('Failed to update task')
+        
+        const updated = await response.json()
+        setTasks(tasks.map(t => t.id === id ? updated : t))
+      }
+    } catch (error) {
+      console.error('Error toggling task:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Failed to update task',
+        variant: 'destructive'
+      })
     }
-
-    setQuranReminders([newReminder, ...quranReminders])
-    setSurahNumber('')
-    setStartAyah('')
-    setEndAyah('')
-    setQuranNotes('')
-    setReminderTime('')
-    setShowQuranDialog(false)
-    toast({ title: t('quran.reminderCreated'), description: t('quran.reminderCreatedDesc') })
   }
 
-  const handleToggleQuranReminder = (id: string) => {
-    setQuranReminders(quranReminders.map(r =>
-      r.id === id ? { ...r, completed: !r.completed } : r
-    ))
-  }
-
-  const handleDeleteQuranReminder = (id: string) => {
-    setQuranReminders(quranReminders.filter(r => r.id !== id))
-    toast({ title: t('quran.reminderDeleted'), description: t('quran.reminderDeletedDesc') })
-  }
-
-  const handleLogin = () => {
-    if (!email || !password) {
-      toast({ title: t('common.error'), description: t('auth.fillAllFields'), variant: 'destructive' })
-      return
+  const handleDeleteTask = async (id: string) => {
+    try {
+      if (isGuest) {
+        const updatedTasks = tasks.filter(task => task.id !== id)
+        setTasks(updatedTasks)
+        saveToLocalStorage('islamic-tracker-tasks', updatedTasks)
+      } else {
+        const response = await fetch(`/api/tasks/${id}`, {
+          method: 'DELETE'
+        })
+        
+        if (!response.ok) throw new Error('Failed to delete task')
+        
+        setTasks(tasks.filter(task => task.id !== id))
+      }
+      
+      toast({ title: t('tasks.taskDeleted'), description: t('tasks.taskDeletedDesc') })
+    } catch (error) {
+      console.error('Error deleting task:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Failed to delete task',
+        variant: 'destructive'
+      })
     }
-    setIsGuest(false)
-    setShowLogin(false)
-    toast({ title: t('auth.loginSuccess'), description: t('auth.loginSuccessDesc') })
+  }
+
+  const handleAddQuranReminder = async (data: QuranReminderFormData) => {
+    try {
+      const surahNum = parseInt(data.surahNumber)
+      const surahName = getSurahName(surahNum)
+      
+      if (isGuest) {
+        const newReminder: QuranReminder = {
+          id: Date.now().toString(),
+          surahNumber: surahNum,
+          surahName,
+          startAyah: parseInt(data.startAyah),
+          endAyah: parseInt(data.endAyah),
+          notes: data.notes || null,
+          completed: false,
+          reminderTime: data.reminderTime ? new Date(data.reminderTime) : null
+        }
+        
+        const updatedReminders = [newReminder, ...quranReminders]
+        setQuranReminders(updatedReminders)
+        saveToLocalStorage('islamic-tracker-reminders', updatedReminders)
+      } else {
+        const response = await fetch('/api/quran-reminders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            surahNumber: surahNum,
+            surahName,
+            startAyah: parseInt(data.startAyah),
+            endAyah: parseInt(data.endAyah),
+            notes: data.notes,
+            reminderTime: data.reminderTime,
+            userId
+          })
+        })
+        
+        if (!response.ok) throw new Error('Failed to create reminder')
+        
+        const newReminder = await response.json()
+        setQuranReminders([newReminder, ...quranReminders])
+      }
+      
+      quranForm.reset()
+      setShowQuranDialog(false)
+      toast({ title: t('quran.reminderCreated'), description: t('quran.reminderCreatedDesc') })
+    } catch (error) {
+      console.error('Error creating reminder:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Failed to create reminder',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  const handleToggleQuranReminder = async (id: string) => {
+    try {
+      const reminder = quranReminders.find(r => r.id === id)
+      if (!reminder) return
+      
+      const updatedReminder = { ...reminder, completed: !reminder.completed }
+      
+      if (isGuest) {
+        const updatedReminders = quranReminders.map(r => r.id === id ? updatedReminder : r)
+        setQuranReminders(updatedReminders)
+        saveToLocalStorage('islamic-tracker-reminders', updatedReminders)
+      } else {
+        const response = await fetch(`/api/quran-reminders/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ completed: !reminder.completed })
+        })
+        
+        if (!response.ok) throw new Error('Failed to update reminder')
+        
+        const updated = await response.json()
+        setQuranReminders(quranReminders.map(r => r.id === id ? updated : r))
+      }
+    } catch (error) {
+      console.error('Error toggling reminder:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Failed to update reminder',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  const handleDeleteQuranReminder = async (id: string) => {
+    try {
+      if (isGuest) {
+        const updatedReminders = quranReminders.filter(r => r.id !== id)
+        setQuranReminders(updatedReminders)
+        saveToLocalStorage('islamic-tracker-reminders', updatedReminders)
+      } else {
+        const response = await fetch(`/api/quran-reminders/${id}`, {
+          method: 'DELETE'
+        })
+        
+        if (!response.ok) throw new Error('Failed to delete reminder')
+        
+        setQuranReminders(quranReminders.filter(r => r.id !== id))
+      }
+      
+      toast({ title: t('quran.reminderDeleted'), description: t('quran.reminderDeletedDesc') })
+    } catch (error) {
+      console.error('Error deleting reminder:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Failed to delete reminder',
+        variant: 'destructive'
+      })
+    }
+  }
+
+  const handleLogin = async (data: LoginFormData) => {
+    try {
+      // For demo purposes, simulate login
+      setIsGuest(false)
+      setUserId('demo-user-id')
+      setShowLogin(false)
+      loginForm.reset()
+      toast({ title: t('auth.loginSuccess'), description: t('auth.loginSuccessDesc') })
+    } catch (error) {
+      console.error('Error during login:', error)
+      toast({ 
+        title: t('common.error'), 
+        description: 'Login failed',
+        variant: 'destructive'
+      })
+    }
   }
 
   const handleGuestMode = () => {
     setIsGuest(true)
+    setUserId('guest')
     setShowLogin(false)
     toast({ title: t('auth.guestModeDesc'), description: t('auth.guestModeDesc') })
+  }
+
+  const handleLogout = () => {
+    setIsGuest(true)
+    setUserId('guest')
+    setTasks([])
+    setQuranReminders([])
+    toast({ title: t('auth.loggedOut'), description: t('auth.loggedOutDesc') })
   }
 
   const getCategoryColor = (category: string) => {
@@ -516,26 +745,50 @@ export default function Home() {
               </div>
 
               <div className="space-y-4">
-                <Input
-                  type="email"
-                  placeholder={t('auth.email')}
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="h-12"
-                />
-                <Input
-                  type="password"
-                  placeholder={t('auth.password')}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="h-12"
-                />
-                <Button
-                  onClick={handleLogin}
-                  className="w-full h-12 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700"
-                >
-                  {t('auth.loginButton')}
-                </Button>
+                <Form {...loginForm}>
+                  <form onSubmit={loginForm.handleSubmit(handleLogin)} className="space-y-4">
+                    <FormField
+                      control={loginForm.control}
+                      name="email"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormControl>
+                            <Input
+                              type="email"
+                              placeholder={t('auth.email')}
+                              className="h-12"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={loginForm.control}
+                      name="password"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormControl>
+                            <Input
+                              type="password"
+                              placeholder={t('auth.password')}
+                              className="h-12"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <Button
+                      type="submit"
+                      className="w-full h-12 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700"
+                    >
+                      {t('auth.loginButton')}
+                    </Button>
+                  </form>
+                </Form>
                 <div className="relative">
                   <div className="absolute inset-0 flex items-center">
                     <span className="w-full border-t" />
@@ -740,65 +993,99 @@ export default function Home() {
                           <DialogTitle>{t('tasks.addNewTask')}</DialogTitle>
                           <DialogDescription>{t('tasks.addNewTask')}</DialogDescription>
                         </DialogHeader>
-                        <div className="space-y-4 mt-4">
-                          <div>
-                            <label className="text-sm font-medium mb-2 block">{t('tasks.taskTitle')} *</label>
-                            <Input
-                              placeholder={t('tasks.taskTitle')}
-                              value={taskTitle}
-                              onChange={(e) => setTaskTitle(e.target.value)}
+                        <Form {...taskForm}>
+                          <form onSubmit={taskForm.handleSubmit(handleAddTask)} className="space-y-4 mt-4">
+                            <FormField
+                              control={taskForm.control}
+                              name="title"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('tasks.taskTitle')} *</FormLabel>
+                                  <FormControl>
+                                    <Input placeholder={t('tasks.taskTitle')} {...field} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
                             />
-                          </div>
-                          <div>
-                            <label className="text-sm font-medium mb-2 block">{t('tasks.taskDescription')}</label>
-                            <Textarea
-                              placeholder={t('tasks.taskDescription')}
-                              value={taskDescription}
-                              onChange={(e) => setTaskDescription(e.target.value)}
-                              rows={3}
+                            <FormField
+                              control={taskForm.control}
+                              name="description"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('tasks.taskDescription')}</FormLabel>
+                                  <FormControl>
+                                    <Textarea placeholder={t('tasks.taskDescription')} {...field} rows={3} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
                             />
-                          </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="text-sm font-medium mb-2 block">{t('tasks.category')}</label>
-                              <Select value={taskCategory} onValueChange={setTaskCategory}>
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="general">{t('tasks.general')}</SelectItem>
-                                  <SelectItem value="worship">{t('tasks.worship')}</SelectItem>
-                                  <SelectItem value="study">{t('tasks.study')}</SelectItem>
-                                  <SelectItem value="work">{t('tasks.work')}</SelectItem>
-                                </SelectContent>
-                              </Select>
+                            <div className="grid grid-cols-2 gap-4">
+                              <FormField
+                                control={taskForm.control}
+                                name="category"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('tasks.category')}</FormLabel>
+                                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent>
+                                        <SelectItem value="general">{t('tasks.general')}</SelectItem>
+                                        <SelectItem value="worship">{t('tasks.worship')}</SelectItem>
+                                        <SelectItem value="study">{t('tasks.study')}</SelectItem>
+                                        <SelectItem value="work">{t('tasks.work')}</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={taskForm.control}
+                                name="priority"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('tasks.priority')}</FormLabel>
+                                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent>
+                                        <SelectItem value="low">{t('tasks.low')}</SelectItem>
+                                        <SelectItem value="medium">{t('tasks.medium')}</SelectItem>
+                                        <SelectItem value="high">{t('tasks.high')}</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
                             </div>
-                            <div>
-                              <label className="text-sm font-medium mb-2 block">{t('tasks.priority')}</label>
-                              <Select value={taskPriority} onValueChange={setTaskPriority}>
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="low">{t('tasks.low')}</SelectItem>
-                                  <SelectItem value="medium">{t('tasks.medium')}</SelectItem>
-                                  <SelectItem value="high">{t('tasks.high')}</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          </div>
-                          <div>
-                            <label className="text-sm font-medium mb-2 block">{t('tasks.dueDate')}</label>
-                            <Input
-                              type="datetime-local"
-                              value={taskDueDate}
-                              onChange={(e) => setTaskDueDate(e.target.value)}
+                            <FormField
+                              control={taskForm.control}
+                              name="dueDate"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('tasks.dueDate')}</FormLabel>
+                                  <FormControl>
+                                    <Input type="datetime-local" {...field} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
                             />
-                          </div>
-                          <Button onClick={handleAddTask} className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700">
-                            {t('tasks.addTask')}
-                          </Button>
-                        </div>
+                            <Button type="submit" className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700">
+                              {t('tasks.addTask')}
+                            </Button>
+                          </form>
+                        </Form>
                       </DialogContent>
                     </Dialog>
                   </div>
@@ -904,67 +1191,93 @@ export default function Home() {
                           <DialogTitle>{t('quran.addQuranReminder')}</DialogTitle>
                           <DialogDescription>{t('quran.addQuranReminder')}</DialogDescription>
                         </DialogHeader>
-                        <div className="space-y-4 mt-4">
-                          <div>
-                            <label className="text-sm font-medium mb-2 block">{t('quran.selectSurah')} *</label>
-                            <Select value={surahNumber} onValueChange={setSurahNumber}>
-                              <SelectTrigger>
-                                <SelectValue placeholder={t('quran.selectSurah')} />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <ScrollArea className="h-[300px]">
-                                  {surahNames.map((name, index) => (
-                                    <SelectItem key={index + 1} value={(index + 1).toString()}>
-                                      {index + 1}. {name}
-                                    </SelectItem>
-                                  ))}
-                                </ScrollArea>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="text-sm font-medium mb-2 block">{t('quran.startAyah')} *</label>
-                              <Input
-                                type="number"
-                                placeholder="1"
-                                min="1"
-                                value={startAyah}
-                                onChange={(e) => setStartAyah(e.target.value)}
+                        <Form {...quranForm}>
+                          <form onSubmit={quranForm.handleSubmit(handleAddQuranReminder)} className="space-y-4 mt-4">
+                            <FormField
+                              control={quranForm.control}
+                              name="surahNumber"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('quran.selectSurah')} *</FormLabel>
+                                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                    <FormControl>
+                                      <SelectTrigger>
+                                        <SelectValue placeholder={t('quran.selectSurah')} />
+                                      </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                      <ScrollArea className="h-[300px]">
+                                        {surahNames.map((name, index) => (
+                                          <SelectItem key={index + 1} value={(index + 1).toString()}>
+                                            {index + 1}. {name}
+                                          </SelectItem>
+                                        ))}
+                                      </ScrollArea>
+                                    </SelectContent>
+                                  </Select>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <div className="grid grid-cols-2 gap-4">
+                              <FormField
+                                control={quranForm.control}
+                                name="startAyah"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('quran.startAyah')} *</FormLabel>
+                                    <FormControl>
+                                      <Input type="number" placeholder="1" min="1" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={quranForm.control}
+                                name="endAyah"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('quran.endAyah')} *</FormLabel>
+                                    <FormControl>
+                                      <Input type="number" placeholder="10" min="1" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
                               />
                             </div>
-                            <div>
-                              <label className="text-sm font-medium mb-2 block">{t('quran.endAyah')} *</label>
-                              <Input
-                                type="number"
-                                placeholder="10"
-                                min="1"
-                                value={endAyah}
-                                onChange={(e) => setEndAyah(e.target.value)}
-                              />
-                            </div>
-                          </div>
-                          <div>
-                            <label className="text-sm font-medium mb-2 block">{t('quran.notes')}</label>
-                            <Textarea
-                              placeholder={t('quran.notes')}
-                              value={quranNotes}
-                              onChange={(e) => setQuranNotes(e.target.value)}
-                              rows={3}
+                            <FormField
+                              control={quranForm.control}
+                              name="notes"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('quran.notes')}</FormLabel>
+                                  <FormControl>
+                                    <Textarea placeholder={t('quran.notes')} {...field} rows={3} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
                             />
-                          </div>
-                          <div>
-                            <label className="text-sm font-medium mb-2 block">{t('quran.reminderTime')}</label>
-                            <Input
-                              type="datetime-local"
-                              value={reminderTime}
-                              onChange={(e) => setReminderTime(e.target.value)}
+                            <FormField
+                              control={quranForm.control}
+                              name="reminderTime"
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('quran.reminderTime')}</FormLabel>
+                                  <FormControl>
+                                    <Input type="datetime-local" {...field} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
                             />
-                          </div>
-                          <Button onClick={handleAddQuranReminder} className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700">
-                            {t('quran.addReminder')}
-                          </Button>
-                        </div>
+                            <Button type="submit" className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700">
+                              {t('quran.addReminder')}
+                            </Button>
+                          </form>
+                        </Form>
                       </DialogContent>
                     </Dialog>
                   </div>
